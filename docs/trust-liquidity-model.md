@@ -13,6 +13,12 @@ This document represents the finalized Trust & Liquidity Model for the Invoice L
 - **Reviewer Question**: How will business identity and corporate risk be assessed at scale without bottlenecking liquidity?
 - **Final Decision**: We will integrate with an established, regulated external KYB provider. Their API provides the necessary corporate structure unrolling and ultimate beneficial owner (UBO) verification required by our initial Liquidity Providers, without storing sensitive PII natively on our infrastructure (see [Privacy Policy](./privacy.md)).
 
+#### 2.1 Provider Unavailability
+
+KYB is a required onboarding control for business borrowers; provider unavailability never counts as a pass. The oracle uses a **temporary hard block with caller-driven retry**: if the required KYB adapter is missing or throws/times out, the verification response is not approved and carries the `rejected-kyb-unavailable` outcome. The borrower remains unapproved and cannot proceed to liquidity onboarding until a successful provider result is available. Provider rejection remains a distinct negative verification result.
+
+The service does not silently fall back to heuristic-only approval, and there is no manual-review override in this contract. Callers should retry after provider health recovers, using bounded backoff. Production oracle wiring requires a live KYB result for approval and bypasses cached verdicts while this check is required; local/test deployments can explicitly opt into non-required KYB for fixtures only. A manual review route, if introduced later, must preserve the same KYB requirement and be separately approved and audited.
+
 ### 3. LP Cold-Start Posture
 - **Reviewer Question**: How do we guarantee initial liquidity before a proven track record is established?
 - **Final Decision**: We will deploy a "First-Loss Provision" managed via a dedicated treasury multi-sig during the cold-start phase. This provides a buffer for external LPs, ensuring that the first 5% of any default is absorbed by the protocol's treasury, drastically lowering the risk threshold for onboarding initial institutional capital.
@@ -51,3 +57,37 @@ This section analyzes protocol exposure, failure modes, and recovery paths in th
 
 ---
 *These decisions mark the conclusion of the Trust & Liquidity Model design phase and govern the v1 mainnet deployment.*
+
+## 6. Simultaneous LP Withdrawal Stress Analysis
+
+### 6.1 Scope and current design boundary
+
+The invoice contract reference describes LP capital as funding individual invoices, supports partial funding, and describes an LP priority queue. It does not define a pooled-share redemption API, withdrawal notice period, withdrawal queue, or guarantee that an LP can redeem capital committed to an unpaid invoice. This analysis therefore stress-tests a **hypothetical pooled deployment**, not a claim that the current contract implements pool withdrawals. Capital committed to an invoice is treated as locked until repayment or another contract-defined terminal outcome; only uncommitted cash is immediately liquid.
+
+The 5% treasury first-loss provision covers a defined slice of credit losses on defaults. It is not a liquidity reserve and does not make locked invoice capital available during a withdrawal run.
+
+### 6.2 Normalized simultaneous-withdrawal model
+
+Assume a pool has 100 units of LP capital immediately before a panic. 60 units are committed to invoices and cannot be redeemed immediately; 40 units are idle cash. There are no repayments, asset sales, or new deposits during the withdrawal window. LPs submit withdrawal requests simultaneously, sized as a share of total pool capital.
+
+| Requested withdrawals | Request size | Immediately payable from 40 idle units | Remaining queued/unpaid | Immediate fulfillment |
+|---|---:|---:|---:|---:|
+| 25% severity | 25 | 25 | 0 | 100% |
+| 50% severity | 50 | 40 | 10 | 80% |
+| 75% severity | 75 | 40 | 35 | 53.3% |
+| 90% severity | 90 | 40 | 50 | 44.4% |
+
+The figures are a deterministic liquidity-accounting example, not a forecast. They exclude defaults, fees, token depegs, and secondary-market sales. If requests are fulfilled first-come-first-served rather than pro rata, early callers can receive all 40 liquid units and late callers can receive nothing, even when request sizes are equal.
+
+### 6.3 Failure mode and proposed controls
+
+There is no documented orderly redemption path in the current design boundary. A pooled implementation that promises synchronous, full redemption would hit a **liquidity cliff** once aggregate requests exceed idle cash (40% in this example). Partial or delayed withdrawals can degrade orderly only if queueing, priority, and repayment allocation are specified in advance. This does not imply that an invoice defaults: it means the LP cannot exit on demand while capital remains committed.
+
+Before introducing pooled LP shares, the contract design should specify:
+
+1. **Epoch-based withdrawal queue:** batch requests at a published cutoff and satisfy them pro rata from available cash and realized repayments. Carry unpaid amounts forward without giving transaction-order priority; disclose that locked capital is not immediately redeemable.
+2. **Funding circuit breaker:** pause new invoice deployment when liquid assets fall below an explicitly governed threshold or queued withdrawals exceed available cash. A pause protects remaining liquidity from additional commitments; it does not create cash or cancel existing obligations.
+3. **Liquidity-aware pricing:** consider an utilization premium for *new* funding only if simulations show it attracts replacement liquidity without making borrower pricing pathological. Fees cannot solve an immediate run and should not be described as a redemption guarantee.
+4. **Run disclosures and monitoring:** publish liquid/committed/queued balances, queue age, and repayment assumptions, and test recovery as invoices repay under base and stressed default assumptions.
+
+These are design recommendations, not deployed protections. The applicable Soroban implementation is maintained in the separate [smart-contract repository](https://github.com/Invoice-Liquidity-Network/ILN-Smart-Contract); no withdrawal logic is claimed here until that implementation defines and tests it.

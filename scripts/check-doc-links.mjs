@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync } from 'fs';
-import { resolve, dirname, join } from 'path';
+import { resolve, dirname, join, sep } from 'path';
 import { readdir } from 'fs/promises';
 
 // `.github/markdown-link-check.json` is the one place the ignore list and the
@@ -58,6 +58,16 @@ function extractLinks(text) {
   return links;
 }
 
+function resolveSiteRoute(route, contentRoot) {
+  const routePath = resolve(contentRoot, `.${route}`);
+  if (routePath !== contentRoot && !routePath.startsWith(`${contentRoot}${sep}`)) return null;
+
+  const candidates = routePath === contentRoot
+    ? [join(contentRoot, 'index.mdx'), join(contentRoot, 'index.md')]
+    : [routePath, `${routePath}.mdx`, `${routePath}.md`, join(routePath, 'index.mdx'), join(routePath, 'index.md')];
+  return candidates.find(existsSync) ?? null;
+}
+
 async function checkFile(filePath, repoRoot, config) {
   const content = readFileSync(filePath, 'utf8');
   const links = extractLinks(content);
@@ -69,7 +79,11 @@ async function checkFile(filePath, repoRoot, config) {
       if (link.startsWith('#')) return;
       // strip title part: url "title"
       const url = link.split(/\s+/)[0];
-      if (config.ignore.some((re) => re.test(url))) return;
+      const contentRoot = resolve(repoRoot, 'packages/docs/content');
+      const isSiteRoute = url.startsWith('/') && filePath.startsWith(`${contentRoot}${sep}`);
+      // Site routes are resolved against the docs content tree below; the
+      // shared ignore list (which skips every absolute path) covers the rest.
+      if (!isSiteRoute && config.ignore.some((re) => re.test(url))) return;
       if (/^https?:\/\//i.test(url)) {
         try {
           const res = await fetchStatus(url, config);
@@ -81,9 +95,11 @@ async function checkFile(filePath, repoRoot, config) {
           );
         }
       } else {
-        // local file
-        const target = resolve(dirname(filePath), url.split('#')[0]);
-        if (!existsSync(target)) problems.push(`missing ${url}`);
+        const localPath = url.split('#')[0];
+        const target = isSiteRoute
+          ? resolveSiteRoute(localPath, contentRoot)
+          : resolve(dirname(filePath), localPath);
+        if (!target || !existsSync(target)) problems.push(`missing ${url}`);
       }
     })
   );

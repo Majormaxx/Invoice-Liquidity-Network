@@ -48,6 +48,36 @@ create_proposal()
 | Max delegation depth   | 10 hops      | Circuit breaker for transitive delegation chains |
 | Veto power             | Enabled      | Can be permanently disabled by governance vote |
 
+### Low-turnout quorum manipulation risk model
+
+The current default policy is a 10% quorum and a simple majority of cast votes. In a low-turnout environment, that can be abused by a concentrated coalition because the required coalition size is not much larger than the quorum threshold itself.
+
+Let:
+
+- q = required quorum fraction of total supply;
+- m = majority threshold of cast votes (currently 50% + 1 vote);
+- t = turnout fraction of total supply at the time of vote settlement;
+- s = attacker-controlled supply fraction.
+
+A successful proposal requires:
+
+- t >= q
+- s >= 0.5 * t when the coalition is the only active yes side and there is no meaningful opposition
+
+Therefore the minimum concentration needed to pass a proposal in a low-turnout scenario is approximately:
+
+- s_min ≈ max(q, 0.5 * t)
+
+Under the current 10% quorum default:
+
+| Turnout | Minimum yes-vote concentration | Interpretation |
+|--------|-------------------------------|----------------|
+| 10% | 10% | A single concentrated holder can pass if they hold at least quorum and no one opposes them |
+| 12% | 6% | A small coordinated coalition can pass with exactly half of the cast vote weight |
+| 20% | 10% | The coalition still only needs quorum-level concentration to win if the rest abstain |
+
+This is why low-turnout attack modeling is a real governance concern even when the rule looks safe on paper. For a governance system intended to resist capture, the recommended review posture is: keep the quorum floor conservative, require a larger buffer above the 50% yes threshold for high-impact changes, and treat any parameter change that affects execution, fee policy, or token access as requiring a formal RFC before implementation.
+
 ### Contract addresses
 
 | Network  | Contract ID                                              |
@@ -333,7 +363,7 @@ A: No. If you have an active delegation your weight counts toward your delegate'
 A: No. Each address may only vote once per proposal (`AlreadyVoted` error is returned on a second attempt).
 
 **Q: What is the maximum delegation chain depth?**  
-A: 10 hops (`MAX_DELEGATION_DEPTH`). Chains longer than 10 are rejected with `DelegationCyclePrevented` as a circuit breaker to prevent infinite delegation loops.
+A: 10 hops (`MAX_DELEGATION_DEPTH`). The contract also rejects cycles; the hop bound limits traversal depth and is not a cap on how much voting power one delegate can receive.
 
 **Q: Can the admin veto any proposal?**  
 A: Yes, while veto power is enabled. The admin can block proposals in `Active` or `Passed` state (error `NotVetoable` for other states). Veto power can be permanently disabled by calling `disable_veto_power` through the ILN contract after a governance vote, after which no single party can block proposals.
@@ -368,3 +398,28 @@ A: `CannotDelegateToSelf` (error code 11). The contract prevents self-delegation
 - [Protocol Overview](./protocol-overview.md) — system-wide design context
 - [ILN Smart Contract Repository](https://github.com/Invoice-Liquidity-Network/ILN-Smart-Contract) — contract source and multi-sig runbook
 - [Governance Monitor Example](../examples/governance-monitor/README.md) — reference implementation for contract monitoring
+
+## Delegation Concentration and Vote-Buying Risk
+
+### What the current controls cover
+
+The documented governance contract rejects self-delegation and delegation cycles, resolves delegation transitively, permits a delegator to replace or revoke its delegate, and caps a delegation chain at 10 hops. Those rules bound traversal and let a token holder change their delegation. They do **not** cap the number of delegators or the share of voting power controlled by one terminal delegate. A delegate can therefore accumulate a large share of participating voting weight through many valid incoming delegations.
+
+The documented vote weight is based on the voter's own snapshotted balance plus delegated weight. Balance snapshots limit post-proposal token transfers from changing a voter's own proposal weight. The reference does not clearly specify whether delegation edges and delegated balances are snapshotted at proposal creation or can be changed during an active vote; this timing must be confirmed against the deployed contract before claiming snapshot protection for delegated power.
+
+### Vote buying
+
+An on-chain delegation is indistinguishable from a voluntary delegation if compensation is arranged privately or off-chain. The contract has no documented mechanism to detect payment, enforce a no-bribery rule, or prove a delegate's motives. Consequently, the current controls are **not technically resistant to delegate-for-payment schemes**. Revocability reduces the delegator's ongoing exposure but does not prevent a paid delegate from casting a vote before revocation; one-vote-per-address also does not address the underlying bargain.
+
+### Concentration assessment and recommended safeguards
+
+The 10-hop limit is not a concentration limit. Neither the governance guide nor the contract reference documents a per-delegate voting-power cap, incoming-delegator cap, or automatic concentration circuit breaker. A hard per-address cap would be easy to evade by splitting power across Sybil addresses and could penalize legitimate delegates, so it should not be presented as a complete mitigation.
+
+Recommended follow-up for the governance contract and its monitoring client:
+
+1. Specify and test a proposal-start snapshot of both token voting units and delegation relationships, including how changes during an active vote take effect. Do not count on-chain balance snapshots as protection for mutable delegation edges.
+2. Expose per-proposal delegated weight and total voting weight by delegate, and alert voters when one delegate exceeds a disclosed concentration threshold. Treat an alert as transparency, not an enforcement guarantee.
+3. Publish delegate policies and conflicts of interest off-chain, and remind token holders to delegate only to representatives they trust and to revoke delegation when that trust changes.
+4. Evaluate any binding concentration cap only with a Sybil-resistance and governance-participation analysis; the current documentation does not establish identity controls that would make a simple address cap robust.
+
+These safeguards are recommendations, not implemented protections in this repository. The contract source is maintained in the separate [ILN Smart Contract repository](https://github.com/Invoice-Liquidity-Network/ILN-Smart-Contract). Until that contract specifies snapshot semantics and corresponding tests, the protocol should not claim that cycle protection also prevents vote buying or voting-power concentration.
