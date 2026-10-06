@@ -892,6 +892,9 @@ importers:
       '@playwright/test':
         specifier: ^1.49.1
         version: 1.49.1
+      '@stellar/freighter-api':
+        specifier: ^6.0.1
+        version: 6.0.1
       '@stryker-mutator/core':
         specifier: ^8.6.0
         version: 8.7.1

@@ -415,7 +415,7 @@ jobs:
       needs.changes.outputs.sdk == 'true' ||
       needs.changes.outputs.cli == 'true' ||
       needs.changes.outputs.indexer == 'true'
-    runs-on: namespace-profile-nursca
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -446,7 +446,7 @@ jobs:
       needs.changes.outputs.sdk == 'true' ||
       needs.changes.outputs.cli == 'true' ||
       needs.changes.outputs.indexer == 'true'
-    runs-on: namespace-profile-nursca
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
